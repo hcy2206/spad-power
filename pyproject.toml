@@ -1,9 +1,29 @@
 [project]
 name = "spad-power"
-version = "0.1.0"
-description = "SPAD target optical power calculator"
+dynamic = ["version"]
+description = "SPAD target optical power calculator: CW power, duty cycle and attenuation for a target photon number per pulse"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "hcy2206" }]
+keywords = ["SPAD", "single-photon", "optical power", "attenuation", "optical density", "PySide6"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: Chinese (Simplified)",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 requires-python = ">=3.12,<3.15"
 dependencies = ["PySide6>=6.8,<7"]
+
+[project.urls]
+Homepage = "https://github.com/hcy2206/spad-power"
+Releases = "https://github.com/hcy2206/spad-power/releases"
+Issues = "https://github.com/hcy2206/spad-power/issues"
 
 [dependency-groups]
 dev = ["pytest>=8,<10", "pyinstaller>=6.12,<7"]
@@ -11,6 +31,12 @@ dev = ["pytest>=8,<10", "pyinstaller>=6.12,<7"]
 [project.gui-scripts]
 spad-power = "spad_power.app:main"
 
+[tool.hatch.version]
+path = "spad_power/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["spad_power"]
+
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"

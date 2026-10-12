@@ -5,12 +5,15 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QAction, QBrush, QColor, QFont, QKeySequence, QPalette
+from PySide6.QtGui import QAction, QBrush, QColor, QFont, QIcon, QKeySequence, QPalette
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QFormLayout, QGroupBox, QDoubleSpinBox, QCheckBox, QPushButton, QLabel, QTableWidget,
     QTableWidgetItem, QHeaderView, QMessageBox, QFileDialog, QAbstractItemView, QSplitter,
     QScrollArea, QToolButton, QFrame, QAbstractSpinBox, QSizePolicy, QComboBox)
+from spad_power import __version__
 from spad_power.model import Settings, Channel, calculate, recommend_fixed_od
+
+ICON = Path(__file__).resolve().parent / 'assets' / 'icon.png'
 
 # key, label, unit, min, max, decimals, primary (shown large; others folded under "探头与滤片设置")
 FIELDS = [
@@ -237,7 +240,7 @@ def hint(text):
 class Window(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('SPAD · 目标光功率计算')
+        self.setWindowTitle(f'SPAD · 目标光功率计算  v{__version__}')
         self.setStyleSheet(STYLE)
         font = QFont(self.font())
         font.setFamilies(FONT_FAMILIES)
@@ -714,6 +717,9 @@ class Window(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    app.setApplicationName('SPAD-Power')
+    app.setApplicationVersion(__version__)
+    app.setWindowIcon(QIcon(str(ICON)))
     app.setStyle('Fusion')
     apply_light_theme(app)
     window = Window()
