@@ -109,3 +109,11 @@ def test_power_meter_reading_uses_probe_aperture():
     unconfirmed = calculate(Settings(), Channel(445, measured=865))
     assert unconfirmed['total_od'] is None and '无法换算' in unconfirmed['status']
     assert recommend_fixed_od(Settings(), [Channel(445, measured=865)]) is None
+
+
+def test_max_photons_with_variable_attenuator_at_minimum():
+    r = calculate(DENSITY, replace(unattenuated(375, 5.0), removed_od=4))
+    assert r['max_photons'] == pytest.approx(0.1 * 10 ** (5.0 - 4 - 0.04))
+    assert calculate(DENSITY, Channel(375))['max_photons'] is None
+    rec = recommend_fixed_od(DENSITY, [unattenuated(375, 5.0), unattenuated(445, 5.6)])
+    assert [n for _, n in rec['max_photons']] == pytest.approx([0.1 * 10 ** 0.96, 0.1 * 10 ** 1.56])

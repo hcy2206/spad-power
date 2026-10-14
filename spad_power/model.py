@@ -100,6 +100,8 @@ def calculate(s: Settings, row: Channel) -> dict:
         calibration_nw_cm2=calibration * 1e9, probe_nw=probe * 1e9 if probe is not None else None,
         measured_nw_cm2=measured_density * 1e9 if measured_density is not None else None,
         total_od=od, variable_od=variable, transmission=10 ** (-od) if od is not None else None,
+        # Mean photons per pulse with the attenuator in and the variable attenuator at its minimum.
+        max_photons=s.photons * 10 ** (variable - s.variable_min) if variable is not None else None,
         status='；'.join(warnings))
     if any(isinstance(v, float) and not math.isfinite(v) for v in result.values()):
         raise ValueError('参数导致数值溢出，请使用合理实验范围')
@@ -129,6 +131,7 @@ def recommend_fixed_od(s: Settings, rows: list[Channel]) -> dict | None:
         center = (low + high) / 2
         od = min({min(max(math.floor(center), 0), 30), min(max(math.ceil(center), 0), 30)}, key=lambda c: (excess(c), -c))
     variable = [(wl, total - od) for wl, total in totals]
+    max_photons = [(wl, s.photons * 10 ** (v - s.variable_min)) for wl, v in variable]
     span = max(t for _, t in totals) - min(t for _, t in totals)
     width = s.variable_max - s.variable_min
     messages = []
@@ -154,4 +157,4 @@ def recommend_fixed_od(s: Settings, rows: list[Channel]) -> dict | None:
         if probe < s.probe_min_nw:
             messages.append(f'该 OD 下最低校准读数 {probe:.4g} nW，低于参考下限' + ('，可选更大的整数 OD' if feasible and od < choices[-1] else ''))
     return dict(recommended_od=od, feasible=feasible, low=low, high=high, span=span, width=width,
-        totals=totals, variable=variable, min_probe_nw=probe, messages=messages)
+        totals=totals, variable=variable, max_photons=max_photons, min_probe_nw=probe, messages=messages)

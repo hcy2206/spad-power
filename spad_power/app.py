@@ -46,10 +46,10 @@ COLUMNS = [
     ('calibration_nw_cm2', 'CW 不插衰减片功率密度\n(nW/cm²)'),
     ('probe_nw', 'CW 不插衰减片探头读数\n(nW)'), ('total_od', '所需总 OD'),
     ('variable_od', '所需可变 OD'), ('transmission', '所需总透过率\n(0～1)'),
-    ('measured_nw_cm2', 'CW 无衰减功率密度\n(nW/cm²)'), ('status', '提示'),
+    ('measured_nw_cm2', 'CW 无衰减功率密度\n(nW/cm²)'), ('max_photons', '可变取下限时光子数\n(个/脉冲)'), ('status', '提示'),
 ]
 DISPLAY_ORDER = ['wavelength_nm', 'density_avg_pw_cm2', 'probe_nw', 'calibration_nw_cm2', 'total_od',
-    'variable_od', 'device_avg_pw', 'density_cw_nw_cm2', 'transmission', 'measured_nw_cm2', 'status']
+    'variable_od', 'max_photons', 'device_avg_pw', 'density_cw_nw_cm2', 'transmission', 'measured_nw_cm2', 'status']
 KEY_COLUMNS = {'density_avg_pw_cm2', 'probe_nw'}
 MINOR_COLUMNS = {'device_avg_pw', 'density_cw_nw_cm2', 'transmission', 'measured_nw_cm2'}
 COLUMN_TIPS = {
@@ -61,6 +61,8 @@ COLUMN_TIPS = {
     'device_avg_pw': '脉冲模式下像元面积内的周期平均功率。',
     'density_cw_nw_cm2': 'CW 模式、插入衰减片时器件处的功率密度 = 目标 / 占空比（即脉冲高值期间的功率密度）。',
     'transmission': '总透过率 = 10^(−总 OD)。',
+    'max_photons': '插入该行衰减片、可变衰减取下限时每脉冲平均入射光子数 = μ × 10^(可变 OD − 下限)，即可达到的最大值；'
+                   '低于目标光子数（标红）说明光不够。需填写 CW 实测值。',
     'measured_nw_cm2': 'CW 无衰减实测值换算成的功率密度；功率计读数按探头有效孔径面积换算。',
 }
 MEASURED_HEADERS = {
@@ -517,7 +519,7 @@ class Window(QMainWindow):
         item.setText(text)
         item.setToolTip(tip)
 
-    def show_advice(self, row_count, has_measured):
+    def show_advice(self, row_count, has_measured, target_photons):
         rec = self.recommendation
         if rec is None:
             if has_measured:  # readings were entered but none could be converted
@@ -532,6 +534,10 @@ class Window(QMainWindow):
         lines = [] if rec['feasible'] else [f'<b style="color:{BAD.name()}">无法用单一整数固定 OD 让所有波长落在可变 OD 范围内，以下为最接近的整数折中值。</b>']
         lines += rec['messages']
         lines.append('采用后各波长所需可变 OD：' + ' · '.join(f'{wl:g} nm <b>{v:.3g}</b>' for wl, v in rec['variable']))
+        def photons(n):  # red when even the minimum variable attenuation cannot reach the target
+            style = '' if n >= target_photons else f' style="color:{BAD.name()}"'
+            return f'<b{style}>{n:.3g}</b>'
+        lines.append('采用后可变衰减取下限时每脉冲光子数：' + ' · '.join(f'{wl:g} nm {photons(n)}' for wl, n in rec['max_photons']))
         if len(rec['totals']) < row_count:
             lines.append(f'未填写 CW 实测值的 {row_count - len(rec["totals"])} 个波长未参与推荐。')
         self.advice_text.setText('<br>'.join(lines))
@@ -612,7 +618,7 @@ class Window(QMainWindow):
             return False
         self.results = results
         self.recommendation = recommendation
-        self.show_advice(len(rows), any(row.measured is not None for row in rows))
+        self.show_advice(len(rows), any(row.measured is not None for row in rows), settings.photons)
         self.set_summary(f'像元面积 <b>{settings.area_cm2:.7g}</b> cm²　·　占空比 <b>{settings.duty * 100:.6g}%</b>　·　'
                          f'{len(results)} 个波长', 'ok')
         self.output.setRowCount(len(results))
@@ -628,6 +634,7 @@ class Window(QMainWindow):
                 item = QTableWidgetItem(text)
                 if key == 'status':
                     item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                    item.setToolTip(text)  # long messages may be cut off by the column width
                     if color is not None:
                         item.setForeground(QBrush(color))
                 else:
@@ -637,6 +644,8 @@ class Window(QMainWindow):
                     item.setBackground(key_background)
                 if key == 'probe_nw' and '低于' in result['status']:
                     item.setForeground(QBrush(WARN))
+                if key == 'max_photons' and value is not None and value < settings.photons:
+                    item.setForeground(QBrush(BAD))
                 if key in ('total_od', 'variable_od') and value is not None and color is not None:
                     item.setForeground(QBrush(color))
                 self.output.setItem(i, j, item)
