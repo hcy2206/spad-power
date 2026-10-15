@@ -49,31 +49,36 @@ class Channel:
     wavelength_nm: float
     od: float = 3  # fixed attenuator in front of the device during the count measurement
     measured: float | None = None  # unattenuated CW value, in Settings.measured_unit
-    light_cps: float | None = None  # SPAD count rate with the attenuated pulsed illumination
-    dark_cps: float | None = None  # SPAD count rate with the laser off
+    light_cps: float | None = None  # Ct: total in-gate count rate with the attenuated pulsed light (dark included)
+    dark_cps: float | None = None  # Cd: in-gate count rate with the laser off
 
 
 def pde_from_counts(s: Settings, row: Channel, photons: float | None, warnings: list[str]):
-    """Free-running SPAD under pulsed light: net detections per pulse p = (light − dark) / f.
+    """Gated SPAD synchronised with the laser at f: at most one count per gate.
 
-    With Poisson-distributed incident photons (mean μ), p = 1 − exp(−PDE·μ), so PDE = −ln(1 − p) / μ.
-    Dead time, afterpulsing and count saturation are not corrected.
+    With per-gate count probabilities Pd = Cd/f (dark) and Pt = Ct/f (light on) and Poisson-distributed
+    incident photons (mean μ), a gate stays silent only if there is neither a dark count nor a detected
+    photon: 1 − Pt = (1 − Pd)·exp(−PDE·μ), so PDE = ln[(1 − Pd) / (1 − Pt)] / μ.
+    Returns (p, PDE) where p = (Pt − Pd) / (1 − Pd) is the photon-induced count probability per gate.
+    Dead time across gates, afterpulsing and crosstalk are not corrected.
     """
     if row.light_cps is None:
         return None, None
     if row.dark_cps is None:
-        warnings.append('未填暗计数率，按 0 计算 PDE')
-    p = (row.light_cps - (row.dark_cps or 0)) / (s.frequency_khz * 1e3)
+        warnings.append('未填门内暗计数率，按 0 计算 PDE')
+    f = s.frequency_khz * 1e3
+    pt, pd = row.light_cps / f, (row.dark_cps or 0) / f
+    if pt >= 1 or pd >= 1:
+        warnings.append('门内计数率不低于重复频率，无法计算 PDE')
+        return None, None
+    p = (pt - pd) / (1 - pd)
     if photons is None:
         warnings.append('缺少 CW 实测值，无法计算光子数和 PDE')
         return p, None
     if p <= 0:
-        warnings.append('光计数率不高于暗计数率，无法计算 PDE')
+        warnings.append('门内总计数率不高于暗计数率，无法计算 PDE')
         return p, None
-    if p >= 1:
-        warnings.append('净计数率不低于重复频率，无法按泊松模型计算 PDE')
-        return p, None
-    pde = -math.log1p(-p) / photons
+    pde = (math.log1p(-pd) - math.log1p(-pt)) / photons
     if pde > 1:
         warnings.append('PDE 超过 100%，请检查 OD、CW 实测值或计数率')
     return p, pde
@@ -114,3 +119,18 @@ def calculate(s: Settings, row: Channel) -> dict:
     if any(isinstance(v, float) and not math.isfinite(v) for v in result.values()):
         raise ValueError('参数导致数值溢出，请使用合理实验范围')
     return result
+
+
+PDE_MIN_PERCENT = 7  # indicator 1: PDE above this at every tested wavelength (UV to NIR)
+PDE_PEAK_MIN_PERCENT = 20  # indicator 2: peak PDE at least this
+
+
+def evaluate_criteria(results: list[dict]) -> dict | None:
+    """Check the two acceptance indicators over the wavelengths that have a PDE; None if none has."""
+    measured = [(r['wavelength_nm'], r['pde_percent']) for r in results if r['pde_percent'] is not None]
+    if not measured:
+        return None
+    below = [wl for wl, pde in measured if not pde > PDE_MIN_PERCENT]
+    peak = max(measured, key=lambda item: item[1])
+    return dict(all_above=not below, below=below, peak=peak, peak_ok=peak[1] >= PDE_PEAK_MIN_PERCENT,
+                missing=len(results) - len(measured))

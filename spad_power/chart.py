@@ -3,9 +3,11 @@ import math
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QToolTip, QWidget
+from spad_power.model import PDE_MIN_PERCENT, PDE_PEAK_MIN_PERCENT
 
 SERIES = QColor('#0b84a5')  # validated: lightness band, chroma floor and 3:1 contrast on white
 GRID, AXIS, TEXT, MUTED = QColor('#eef1f5'), QColor('#d3dae4'), QColor('#1f2a37'), QColor('#6b7686')
+BAD, GOOD = QColor('#c0392b'), QColor('#1e8449')  # status colours, always paired with a text label
 MARGIN_LEFT, MARGIN_RIGHT, MARGIN_TOP, MARGIN_BOTTOM = 52, 24, 34, 44
 
 
@@ -39,7 +41,7 @@ class PdeChart(QWidget):
         low, high = min(wavelengths), max(wavelengths)
         pad = max((high - low) * 0.06, 10) if high > low else 50
         x_step = nice_step(high - low + 2 * pad)
-        y_top = max(max(p[1] for p in self.points) * 1.15, 1)
+        y_top = max(max(p[1] for p in self.points) * 1.15, PDE_PEAK_MIN_PERCENT * 1.25)  # keep both indicator lines in view
         y_step = nice_step(y_top)
         return (low - pad, high + pad, x_step), (0, math.ceil(y_top / y_step) * y_step, y_step)
 
@@ -79,6 +81,15 @@ class PdeChart(QWidget):
             p.drawText(QRectF(px - 30, rect.bottom() + 6, 60, 16), Qt.AlignmentFlag.AlignCenter, f'{x:g}')
         p.drawText(QRectF(rect.left(), rect.bottom() + 24, rect.width(), 16), Qt.AlignmentFlag.AlignCenter, '波长 (nm)')
         p.drawText(QRectF(4, 6, 120, 18), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, 'PDE (%)')
+        for level, color, label in [(PDE_MIN_PERCENT, BAD, f'指标 {PDE_MIN_PERCENT}%'),
+                                    (PDE_PEAK_MIN_PERCENT, GOOD, f'峰值指标 {PDE_PEAK_MIN_PERCENT}%')]:
+            line_color = QColor(color)
+            line_color.setAlphaF(0.55)
+            py = to_point(x0, level).y()
+            p.setPen(QPen(line_color, 1, Qt.PenStyle.DashLine))
+            p.drawLine(QPointF(rect.left(), py), QPointF(rect.right(), py))
+            p.setPen(MUTED)
+            p.drawText(QRectF(rect.right() - 110, py - 17, 110, 15), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, label)
         points = [to_point(wl, pde) for wl, pde, _ in self.points]
         if self.hover is not None:  # crosshair snapped to the nearest wavelength
             p.setPen(QPen(AXIS, 1))
@@ -99,7 +110,7 @@ class PdeChart(QWidget):
         for i, point in enumerate(points):
             radius = 6 if i == self.hover else 4.5
             p.setPen(QPen(QColor('white'), 2))
-            p.setBrush(SERIES)
+            p.setBrush(SERIES if self.points[i][1] > PDE_MIN_PERCENT else BAD)  # below indicator 1 in red
             p.drawEllipse(point, radius, radius)
         peak = max(range(len(points)), key=lambda i: self.points[i][1])  # one direct label: the peak
         bold = QFont(font)
@@ -120,8 +131,9 @@ class PdeChart(QWidget):
             self.update()
         wl, pde, photons = self.points[nearest]
         photons_text = f'{photons:.3g}' if photons is not None else '—'
+        note = '' if pde > PDE_MIN_PERCENT else f'<br>低于指标 {PDE_MIN_PERCENT}%'
         QToolTip.showText(event.globalPosition().toPoint(),
-                          f'<b>PDE {pde:.4g}%</b><br>{wl:g} nm · 每脉冲 {photons_text} 个光子', self)
+                          f'<b>PDE {pde:.4g}%</b><br>{wl:g} nm · 每脉冲 {photons_text} 个光子{note}', self)
 
     def leaveEvent(self, event):
         self.hover = None

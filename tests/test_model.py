@@ -1,7 +1,7 @@
 from dataclasses import replace
 import math
 import pytest
-from spad_power.model import Settings, Channel, calculate
+from spad_power.model import Settings, Channel, calculate, evaluate_criteria
 
 DENSITY = Settings(measured_unit='nW/cm2')
 # CW density (nW/cm², no attenuator) that gives 0.1 photons per pulse at 375 nm with OD 3 and the default
@@ -34,12 +34,16 @@ def test_power_meter_reading_uses_probe_aperture():
     assert unconfirmed['photons'] is None and '无法换算' in unconfirmed['status']
 
 
-def test_pde_from_light_and_dark_counts():
+def test_pde_gated_formula():
     r = calculate(DENSITY, Channel(375, od=3, measured=CW_375, light_cps=500, dark_cps=100))
-    assert r['detection_prob'] == pytest.approx(0.04)  # (500 − 100) / 10 kHz
-    assert r['pde_percent'] == pytest.approx(-math.log(0.96) / 0.1 * 100)
+    # PDE = ln[(1 − Cd/f) / (1 − Ct/f)] / μ with f = 10 kHz, μ = 0.1
+    assert r['pde_percent'] == pytest.approx(math.log((1 - 0.01) / (1 - 0.05)) / 0.1 * 100)
+    assert r['pde_percent'] == pytest.approx(41.242958534, rel=1e-9)
+    assert r['detection_prob'] == pytest.approx((0.05 - 0.01) / (1 - 0.01))
     no_dark = calculate(DENSITY, Channel(375, od=3, measured=CW_375, light_cps=500))
     assert '按 0 计算' in no_dark['status'] and no_dark['pde_percent'] == pytest.approx(-math.log(0.95) / 0.1 * 100)
+    saturated = calculate(DENSITY, Channel(375, od=3, measured=CW_375, light_cps=10000, dark_cps=100))
+    assert saturated['pde_percent'] is None and '不低于重复频率' in saturated['status']
     below = calculate(DENSITY, Channel(375, od=3, measured=CW_375, light_cps=50, dark_cps=100))
     assert below['pde_percent'] is None and '无法计算 PDE' in below['status']
     no_photons = calculate(DENSITY, Channel(375, light_cps=500, dark_cps=100))
@@ -58,3 +62,14 @@ def test_invalid_settings(key, value):
 def test_invalid_channels(row):
     with pytest.raises(ValueError):
         calculate(Settings(), row)
+
+
+def test_criteria_indicators():
+    def result(wl, pde):
+        return dict(wavelength_nm=wl, pde_percent=pde)
+    verdict = evaluate_criteria([result(375, 12), result(445, 25), result(808, 7), result(900, None)])
+    assert not verdict['all_above'] and verdict['below'] == [808]  # indicator 1 needs strictly above 7 %
+    assert verdict['peak'] == (445, 25) and verdict['peak_ok'] and verdict['missing'] == 1
+    assert evaluate_criteria([result(375, 7.5), result(445, 19.9)]) == dict(
+        all_above=True, below=[], peak=(445, 19.9), peak_ok=False, missing=0)
+    assert evaluate_criteria([result(375, None)]) is None

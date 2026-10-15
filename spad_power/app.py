@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QScrollArea, QToolButton, QFrame, QAbstractSpinBox, QSizePolicy, QComboBox)
 from spad_power import __version__
 from spad_power.chart import PdeChart
-from spad_power.model import Settings, Channel, calculate
+from spad_power.model import Settings, Channel, calculate, evaluate_criteria, PDE_MIN_PERCENT, PDE_PEAK_MIN_PERCENT
 
 ICON = Path(__file__).resolve().parent / 'assets' / 'icon.png'
 SETTINGS_FIELDS = {f.name for f in fields(Settings)}
@@ -35,7 +35,7 @@ FIELD_TIPS = {
 # CSV export keeps this order; the on-screen table uses DISPLAY_ORDER.
 COLUMNS = [
     ('wavelength_nm', '波长\n(nm)'), ('photons', '每脉冲入射光子数\n(个/脉冲)'), ('pde_percent', 'PDE\n(%)'),
-    ('detection_prob', '每脉冲净探测概率'), ('device_avg_pw', '器件脉冲平均功率\n(pW)'),
+    ('detection_prob', '每门光致计数概率'), ('device_avg_pw', '器件脉冲平均功率\n(pW)'),
     ('density_avg_pw_cm2', '器件脉冲平均功率密度\n(pW/cm²)'), ('measured_nw_cm2', 'CW 无衰减功率密度\n(nW/cm²)'),
     ('status', '提示'),
 ]
@@ -44,8 +44,9 @@ KEY_COLUMNS = {'photons', 'pde_percent'}
 MINOR_COLUMNS = {'detection_prob', 'device_avg_pw', 'density_avg_pw_cm2', 'measured_nw_cm2'}
 COLUMN_TIPS = {
     'photons': '插入该行衰减片、脉冲模式下每个脉冲平均入射到像元的光子数 = CW 无衰减功率 × 占空比 × 10^(−OD) / (f·hc/λ)。需填写 CW 实测值。',
-    'pde_percent': '光子探测效率 = −ln(1 − p) / μ，p 为每脉冲净探测概率，μ 为每脉冲入射光子数；未修正死时间、后脉冲和饱和。需填写光计数率。',
-    'detection_prob': '每脉冲净探测概率 p = (光计数率 − 暗计数率) / 重复频率。',
+    'pde_percent': '光子探测效率 = ln[(1 − Cd/f) / (1 − Ct/f)] / μ（门控模式，每门至多一次计数），μ 为每脉冲入射光子数；'
+                   f'低于指标 {PDE_MIN_PERCENT}% 时标红。需填写门内总计数率 Ct。',
+    'detection_prob': '每门由光子引起的计数概率 p = (Ct/f − Cd/f) / (1 − Cd/f)，PDE = −ln(1 − p) / μ。',
     'device_avg_pw': '插入衰减片、脉冲模式下像元面积内的周期平均功率。',
     'density_avg_pw_cm2': '插入衰减片、脉冲模式下器件处的周期平均功率密度。',
     'measured_nw_cm2': 'CW 无衰减实测值换算成的功率密度；功率计读数按探头有效孔径面积换算。',
@@ -60,14 +61,16 @@ CHANNEL_HEADERS = [
     ('波长 (nm)', '各波长独立计算。'),
     ('衰减片 OD', '测计数时插在器件前的外置衰减片 OD（填该波长处的实测 OD）。'),
     ('CW 无衰减实测值', ''),  # text depends on the measured unit, see update_measured_header
-    ('光计数率 (cps)', '可留空。插入衰减片、脉冲模式下 SPAD 测得的计数率（次/秒）；填写后计算 PDE。'),
-    ('暗计数率 (cps)', '可留空（按 0 计算）。关闭激光、相同条件下测得的暗计数率（次/秒）。'),
+    ('门内总计数 Ct (cps)', '可留空。插入衰减片、脉冲模式下，SPAD 门控时间内的计数之和（次/秒，含暗计数）；填写后计算 PDE。'
+                           '计数器采集时间不是 1 秒时，先除以采集时间。'),
+    ('门内暗计数 Cd (cps)', '可留空（按 0 计算）。关闭光源、相同门控与偏置条件下，门控时间内的计数之和（次/秒）。'
+                           '不是自由运行时整个周期的暗计数率。'),
 ]
 ACCENT, ACCENT_HOVER, ACCENT_PRESSED = '#0f7a94', '#0d6b82', '#0a5a6d'
 BG, CARD, BORDER, FIELD_BORDER = '#f3f5f9', '#ffffff', '#e2e7ef', '#d3dae4'
 TEXT, MUTED = '#1f2a37', '#6b7686'
 FONT_FAMILIES = ['PingFang SC', 'Microsoft YaHei UI', 'Segoe UI', 'Helvetica Neue', 'Noto Sans CJK SC']
-WARN = QColor('#b9770e')
+WARN, BAD, GOOD = QColor('#b9770e'), QColor('#c0392b'), QColor('#1e8449')
 BANNER = {
     'ok': 'rgba(15, 122, 148, 0.09); border: 1px solid rgba(15, 122, 148, 0.30)',
     'stale': 'rgba(230, 160, 30, 0.14); border: 1px solid rgba(200, 130, 20, 0.55)',
@@ -245,7 +248,7 @@ class Window(QMainWindow):
         title = QLabel('SPAD 光子数与 PDE')
         title.setStyleSheet(f'font-size: 22px; font-weight: 700; color: {ACCENT};')
         titles.addWidget(title)
-        subtitle = QLabel('测量激光 CW 功率，按占空比和衰减片 OD 算出每脉冲入射光子数，再由光计数率和暗计数率计算 PDE。')
+        subtitle = QLabel('测量激光 CW 功率，按占空比和衰减片 OD 算出每脉冲入射光子数，再由门内总计数和暗计数计算 PDE 并判定指标。')
         subtitle.setObjectName('subtitle')
         titles.addWidget(subtitle)
         header.addLayout(titles, 1)
@@ -331,7 +334,9 @@ class Window(QMainWindow):
         self.model_help = Section('模型与适用条件', hint(
             '· 在 CW 模式下、不加衰减片测功率；假设脉冲高值功率等于 CW 功率（矩形脉冲、相同驱动），脉冲平均功率 = CW × 占空比。\n'
             '· 每脉冲入射光子数 = CW 功率 × 占空比 × 10^(−OD) / (重复频率 × 单光子能量)，按像元面积计。\n'
-            '· PDE = −ln(1 − p) / 光子数，p = (光计数率 − 暗计数率) / 重复频率；未修正死时间、后脉冲和计数饱和。\n'
+            '· 门控模式（SPAD 门与激光同步于 f，每门至多一次计数）：PDE = ln[(1 − Cd/f) / (1 − Ct/f)] / 光子数；'
+            'Ct、Cd 为门控时间内的计数率；未修正后脉冲和串扰。\n'
+            f'· 指标：各波长 PDE > {PDE_MIN_PERCENT}%，峰值 PDE ≥ {PDE_PEAK_MIN_PERCENT}%。\n'
             '· 矩形光脉冲，低值期间漏光可忽略；像元区域均匀照明。\n'
             '· 实际脉冲高值功率可能与 CW 不同（瞬态、热效应），必要时应实测核对。\n'
             '· OD 应使用对应波长的实测值；衰减片指外置滤片，不是探头内置滤片。\n'
@@ -359,7 +364,7 @@ class Window(QMainWindow):
         self.common_dark = NumberBox('cps', 0, 1e12, 1, 0)
         for label, box, callback, tip in [
                 ('统一衰减片 OD', self.common_od, self.apply_common_od, '各波长使用同一片衰减片时，输入 OD 后按回车或点“应用到全部波长”。'),
-                ('统一暗计数率', self.common_dark, self.apply_common_dark, '暗计数率与波长无关时，输入后按回车或点“应用到全部波长”。')]:
+                ('统一门内暗计数 Cd', self.common_dark, self.apply_common_dark, '门内暗计数与波长无关时，输入后按回车或点“应用到全部波长”。')]:
             tools.addWidget(QLabel(label))
             box.setFixedWidth(84 if box is self.common_od else 110)
             box.setToolTip(tip)
@@ -377,7 +382,7 @@ class Window(QMainWindow):
             button.clicked.connect(callback)
             tools.addWidget(button)
         vbox.addLayout(tools)
-        vbox.addWidget(hint('统一值一键填入所有波长，个别波长可在表中单独修改。后三列可留空：填写 CW 无衰减实测值后计算每脉冲光子数，再填写光计数率即可计算 PDE。'))
+        vbox.addWidget(hint('统一值一键填入所有波长，个别波长可在表中单独修改。后三列可留空：填写 CW 无衰减实测值后计算每脉冲光子数，再填写门内总计数 Ct（和暗计数 Cd）即可计算 PDE。'))
         self.channels = QTableWidget(0, len(CHANNEL_HEADERS))
         self.channels.setHorizontalHeaderLabels([text for text, _ in CHANNEL_HEADERS])
         for col, (_, tip) in enumerate(CHANNEL_HEADERS):
@@ -417,10 +422,14 @@ class Window(QMainWindow):
         title.setObjectName('cardTitle')
         head.addWidget(title)
         head.addStretch(1)
-        self.show_minor = QCheckBox('显示次要列（净探测概率、器件脉冲平均功率与功率密度、CW 换算功率密度）')
+        self.show_minor = QCheckBox('显示次要列（光致计数概率、器件脉冲平均功率与功率密度、CW 换算功率密度）')
         self.show_minor.toggled.connect(self.update_minor_columns)
         head.addWidget(self.show_minor)
         cbox.addLayout(head)
+        self.verdict = QLabel()
+        self.verdict.setWordWrap(True)
+        self.verdict.hide()
+        cbox.addWidget(self.verdict)
         self.output = QTableWidget(0, len(DISPLAY_ORDER))
         labels = dict(COLUMNS)
         for col, key in enumerate(DISPLAY_ORDER):
@@ -447,8 +456,22 @@ class Window(QMainWindow):
         rbox.addWidget(card, 1)
         splitter.addWidget(results)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([392, 428])
+        splitter.setSizes([374, 446])
         return splitter
+
+    def show_verdict(self, verdict):
+        if verdict is None:
+            self.verdict.hide()
+            return
+        def mark(ok):  # icon + label, never colour alone
+            return f'<span style="color:{(GOOD if ok else BAD).name()}"><b>{"✓ 通过" if ok else "✗ 未通过"}</b></span>'
+        below = '、'.join(f'{wl:g} nm' for wl in verdict['below'])
+        first = f'指标 1（各波长 PDE &gt; {PDE_MIN_PERCENT}%）：{mark(verdict["all_above"])}' + (f'（低于指标：{below}）' if below else '')
+        wl, pde = verdict['peak']
+        second = f'指标 2（峰值 PDE ≥ {PDE_PEAK_MIN_PERCENT}%）：{mark(verdict["peak_ok"])}（峰值 {pde:.4g}% @ {wl:g} nm）'
+        missing = f'　·　{verdict["missing"]} 个波长无 PDE，未参与判定' if verdict['missing'] else ''
+        self.verdict.setText(f'{first}　　{second}{missing}')
+        self.verdict.show()
 
     def update_minor_columns(self, visible):
         for col, key in enumerate(DISPLAY_ORDER):
@@ -466,6 +489,7 @@ class Window(QMainWindow):
             self.set_summary(f'参数已修改，旧结果已清空。请点击“计算”（{keys}）重新计算。', 'stale')
             self.output.setRowCount(0)
             self.chart.set_data([])
+            self.verdict.hide()
 
     def add_channel(self, checked=False, values=None):
         interactive = values is None
@@ -562,6 +586,7 @@ class Window(QMainWindow):
         self.set_summary(f'像元面积 <b>{settings.area_cm2:.7g}</b> cm²　·　占空比 <b>{settings.duty * 100:.6g}%</b>　·　'
                          f'{len(results)} 个波长' + (f'　·　{notes} 个波长有提示（鼠标悬停该行查看）' if notes else ''), 'ok')
         self.chart.set_data([(r['wavelength_nm'], r['pde_percent'], r['photons']) for r in results])
+        self.show_verdict(evaluate_criteria(results))
         self.output.setRowCount(len(results))
         key_font = QFont(self.output.font())
         key_font.setBold(True)
@@ -576,6 +601,9 @@ class Window(QMainWindow):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 if result['status']:  # notes replace the former status column
                     item.setToolTip(result['status'])
+                if key == 'pde_percent' and value is not None and not value > PDE_MIN_PERCENT:
+                    item.setForeground(QBrush(BAD))
+                    item.setToolTip('；'.join(filter(None, [f'低于指标 {PDE_MIN_PERCENT}%', result['status']])))
                 if value is None and color is not None:
                     item.setForeground(QBrush(color))
                 if key in KEY_COLUMNS:
@@ -645,11 +673,18 @@ class Window(QMainWindow):
                     writer.writerow(['参数', '值'])
                     writer.writerows(asdict(self.read_settings()).items())
                     writer.writerow([])
-                    writer.writerow(['输入波长_nm', '衰减片_OD', f'CW无衰减实测值_{self.unit_box.currentData()}', '光计数率_cps', '暗计数率_cps'])
+                    writer.writerow(['输入波长_nm', '衰减片_OD', f'CW无衰减实测值_{self.unit_box.currentData()}', '门内总计数_Ct_cps', '门内暗计数_Cd_cps'])
                     writer.writerows(asdict(c).values() for c in self.read_channels())
                     writer.writerow([])
                     writer.writerow([label.replace('\n', ' ') for _, label in COLUMNS])
                     writer.writerows([r[key] for key, _ in COLUMNS] for r in self.results)
+                    verdict = evaluate_criteria(self.results)
+                    if verdict is not None:
+                        writer.writerow([])
+                        writer.writerow([f'指标1_各波长PDE>{PDE_MIN_PERCENT}%', '通过' if verdict['all_above'] else '未通过',
+                                         '低于指标: ' + ' '.join(f'{wl:g}nm' for wl in verdict['below'])])
+                        writer.writerow([f'指标2_峰值PDE>={PDE_PEAK_MIN_PERCENT}%', '通过' if verdict['peak_ok'] else '未通过',
+                                         f'峰值 {verdict["peak"][1]}% @ {verdict["peak"][0]:g}nm'])
             except OSError as exc:
                 QMessageBox.warning(self, '导出失败', str(exc))
 

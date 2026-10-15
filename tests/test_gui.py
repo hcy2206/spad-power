@@ -27,7 +27,8 @@ def test_gui_calculation_and_stale_results():
     assert window.output.rowCount() == 0
     assert window.run()
     assert abs(window.results[0]['photons'] - 0.1) < 1e-12
-    assert 40.82 < window.results[0]['pde_percent'] < 40.83
+    assert 41.24 < window.results[0]['pde_percent'] < 41.25
+    assert not window.verdict.isHidden() and '通过' in window.verdict.text()
     window.show()
     app.processEvents()
     window.close()
@@ -46,12 +47,12 @@ def test_save_load_export(tmp_path, monkeypatch):
     monkeypatch.setattr(QFileDialog, 'getOpenFileName', lambda *args: (str(settings_path), ''))
     window.load()
     assert window.inputs['frequency_khz'].value() == 10 and window.uniform.isChecked()
-    assert window.channels.item(0, 3).text() == '500.0' and 40.82 < window.results[0]['pde_percent'] < 40.83
+    assert window.channels.item(0, 3).text() == '500.0' and 41.24 < window.results[0]['pde_percent'] < 41.25
     output_path = tmp_path / 'results.csv'
     monkeypatch.setattr(QFileDialog, 'getSaveFileName', lambda *args: (str(output_path), ''))
     window.export()
     content = output_path.read_text(encoding='utf-8-sig')
-    assert '40.8219' in content and 'frequency_khz,10.0' in content
+    assert '41.2429' in content and 'frequency_khz,10.0' in content and '指标1_各波长PDE>7%,通过' in content
     data = json.loads(settings_path.read_text(encoding='utf-8'))
     assert data['version'] == 6 and data['channels'][0]['od'] == 3
     # Old files: v1 stored the pulsed-average density, a target photon number and a separate fixed total OD.
