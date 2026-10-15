@@ -2,7 +2,7 @@
 
 本项目的版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.4.0] - 2026-10-15
 
 按 SPAD 测试方法（门控模式）调整 PDE 计算，并加入指标判定。
 
@@ -60,6 +60,7 @@
 - **记录与导出：** 保存/加载 JSON 参数（兼容旧版文件），导出含输入、结果和推荐 OD 的 CSV。
 - **界面：** 卡片式浅色界面，重要参数与结果放大突出，次要设置和次要列默认折叠，提示按严重程度着色；支持快捷键。
 
+[0.4.0]: https://github.com/hcy2206/spad-power/releases/tag/v0.4.0
 [0.3.0]: https://github.com/hcy2206/spad-power/releases/tag/v0.3.0
 [0.2.0]: https://github.com/hcy2206/spad-power/releases/tag/v0.2.0
 [0.1.0]: https://github.com/hcy2206/spad-power/releases/tag/v0.1.0
