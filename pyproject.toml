@@ -1,7 +1,7 @@
 [project]
 name = "spad-power"
 dynamic = ["version"]
-description = "SPAD target optical power calculator: CW power, duty cycle and attenuation for a target photon number per pulse"
+description = "SPAD photon number and PDE calculator: CW power, duty cycle and attenuator OD to photons per pulse, and PDE from count rates"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
